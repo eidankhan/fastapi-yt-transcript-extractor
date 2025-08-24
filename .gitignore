@@ -20,3 +20,7 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
+
+# Ignore Git workflow guide and Monetization plan files
+GIT_WORKFLOW_GUIDE.md
+MONETIZATION_PLAN.md
