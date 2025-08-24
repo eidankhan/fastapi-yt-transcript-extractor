@@ -197,3 +197,71 @@ The log file will automatically rotate when it reaches 5MB, keeping the last 5 f
 * **Docker & Docker Compose**
 * **Pydantic** for request/response validation
 * **Uvicorn** as ASGI server
+
+---
+> # Token Limit & Rate Limiting
+
+## 🛡️ In-Memory Rate Limiting (Issue #15) 
+
+**Purpose:**  
+Introduce basic rate limiting for the API to prevent abuse and enforce usage limits per user/API key.
+
+### 🔹 Key Points
+
+- **Per-user/API key limits:**  
+  Each user must provide an `x-api-key` header. Requests without it are rejected (`401 Unauthorized`).  
+
+- **Request limits:**  
+  - Configurable `max_per_window` (e.g., 3 requests)  
+  - Configurable `window_seconds` (e.g., 60 seconds)  
+
+- **Enforcement:**  
+  - Requests exceeding the limit return `429 Too Many Requests`  
+  - Middleware attaches headers to all responses:  
+    ```
+    X-RateLimit-Limit      # Maximum requests allowed per window
+    X-RateLimit-Remaining  # Remaining requests in current window
+    X-RateLimit-Reset      # Timestamp when current window resets
+    Retry-After            # Included on 429 responses
+    ```
+
+- **Implementation:**  
+  - `app/limiting/memory.py` → in-memory counter per API key  
+  - `app/limiting/deps.py` → FastAPI dependency for rate limiting  
+  - `app/main.py` → middleware to attach headers  
+  - `app/routes.py` → transcript endpoint protected via dependency  
+
+- **Behavior:**  
+  - 1st–`max_per_window` requests → `200 OK`  
+  - Requests beyond limit → `429`  
+  - No API key → `401 Unauthorized`  
+  - Counters reset after the configured window period  
+
+- **Limitations:**  
+  - In-memory only → counters reset if the server restarts  
+  - Suitable as an MVP / proof-of-concept before moving to persistent storage (Redis/Postgres)  
+
+### 🔹 Example Requests
+
+**Successful Request:**
+```http
+GET /api/transcripts?video_url=<id>
+Headers: x-api-key: test-key
+
+200 OK
+{
+  "transcript": "..."
+}
+````
+
+**Rate Limit Exceeded:**
+
+```http
+GET /api/transcripts?video_url=<id>
+Headers: x-api-key: test-key
+
+429 Too Many Requests
+{
+  "detail": "Rate limit exceeded. Try again in 45 seconds."
+}
+```

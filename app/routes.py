@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends, Request
 from fastapi.responses import JSONResponse
 from app.services import get_transcript
 from app.exceptions import TranscriptError
@@ -6,6 +6,8 @@ from app.schemas import SuccessResponse, ErrorResponse
 from fastapi import status
 from typing import Optional
 from app.logger import logger
+from app.limiting.deps import rate_limit_dependency
+
 
 router = APIRouter()
 
@@ -20,7 +22,8 @@ router = APIRouter()
         500: {"model": ErrorResponse, "description": "Internal server error"}
     },
     summary="Fetch transcript of a YouTube video",
-    description="Returns cleaned transcript, raw data, and SRT-formatted timestamps."
+    description="Returns cleaned transcript, raw data, and SRT-formatted timestamps.",
+    dependencies=[Depends(rate_limit_dependency())]
 )
 async def fetch_transcript(video_id: str, language: Optional[str] = Query(None, description="Optional language code, e.g., 'en'")):
     logger.info(f"Received request: video_id={video_id}, language={language}")
