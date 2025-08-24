@@ -1,10 +1,13 @@
-from fastapi import Request, HTTPException, Depends
-from .memory import InMemoryLimiter
+from fastapi import Request, HTTPException
 import time
+from .memory import InMemoryLimiter
+from .persistent import RedisLimiter
 
-# Configure limiter: 3 requests per 60 seconds
+# Configure limiters
 limiter = InMemoryLimiter(max_per_window=3, window_seconds=60)
+redis_limiter = RedisLimiter(limit=3, period_seconds=86400)
 
+# In-memory rate limiter dependency
 def rate_limit_dependency():
     async def _dep(request: Request):
         api_key = request.headers.get("x-api-key")
@@ -14,7 +17,6 @@ def rate_limit_dependency():
         allowed, limit, remaining, reset_ts = await limiter.check(api_key)
         reset_in = max(0, reset_ts - int(time.time()))
 
-        # Attach headers for reporting
         request.state.rate_limit_headers = {
             "X-RateLimit-Limit": str(limit),
             "X-RateLimit-Remaining": str(remaining),
@@ -27,4 +29,29 @@ def rate_limit_dependency():
                 detail=f"Rate limit exceeded. Try again in {reset_in} seconds."
             )
 
-    return _dep
+    return _dep  # ← Important: return the inner async function
+
+
+# Redis-based persistent rate limiter dependency
+def redis_rate_limit_dependency():
+    async def _dep(request: Request):
+        api_key = request.headers.get("x-api-key")
+        if not api_key:
+            raise HTTPException(status_code=401, detail="API key required")
+
+        allowed, limit, remaining, reset_ts = await redis_limiter.check(api_key)
+        reset_in = max(0, reset_ts - int(time.time()))
+
+        request.state.rate_limit_headers = {
+            "X-RateLimit-Limit": str(limit),
+            "X-RateLimit-Remaining": str(remaining),
+            "X-RateLimit-Reset": str(reset_ts),
+        }
+
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Rate limit exceeded. Try again in {reset_in} seconds."
+            )
+
+    return _dep  # ← Must return the async function

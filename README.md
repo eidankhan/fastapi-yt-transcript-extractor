@@ -265,3 +265,77 @@ Headers: x-api-key: test-key
   "detail": "Rate limit exceeded. Try again in 45 seconds."
 }
 ```
+## 🛡️ Persistent Rate Limiting (Issue #16)
+
+Enhance the API with persistent rate limiting using Redis to ensure limits survive server restarts and support longer time windows (daily/monthly). This is crucial for preventing abuse and enabling monetization tiers.
+
+### 🔹 Key Points
+
+- **Persistence:**  
+  - API usage per user/API key is stored in Redis.  
+  - Counters survive **server restarts**.  
+
+- **Limits & Windows:**  
+  - Configurable `limit` (e.g., 100 requests per day for free users).  
+  - Configurable `period_seconds` (daily = 86400s, monthly = 2592000s).  
+  - Each user/API key gets a separate counter with an automatic expiration.
+
+- **API Key Enforcement:**  
+  - Requests must include `x-api-key` header.  
+  - Missing API key → `401 Unauthorized`.  
+
+- **Enforcement Behavior:**  
+  - Allowed requests → `200 OK`  
+  - Exceeding the limit → `429 Too Many Requests`  
+  - Response headers provide usage information:
+
+```
+
+X-RateLimit-Limit      # Maximum requests per window
+X-RateLimit-Remaining  # Remaining requests in current window
+X-RateLimit-Reset      # Timestamp when current window resets
+Retry-After            # Included in 429 responses
+
+````
+
+- **Integration with FastAPI:**  
+  - Dependency function `redis_rate_limit_dependency` returns an async function `_dep`.  
+  - Applied per route using `Depends(redis_rate_limit_dependency)`.  
+  - Handles attaching headers and raising HTTP exceptions automatically.  
+
+- **Implementation:**  
+  - `app/limiting/redis_client.py` → Redis connection setup.  
+  - `app/limiting/persistent.py` → RedisLimiter class for counting requests.  
+  - `app/limiting/deps.py` → FastAPI dependency for Redis rate limiting.  
+
+- **Advantages over In-Memory Limiter:**  
+  - Limits persist across restarts.  
+  - Supports longer periods (daily/monthly).  
+  - Can be extended to **tiered plans** (free/paid/enterprise).  
+
+---
+
+### 🔹 Example Request/Response
+
+**Successful Request:**
+```http
+GET /api/transcripts?video_url=<id>
+Headers: x-api-key: test-key
+
+200 OK
+{
+  "transcript": "..."
+}
+````
+
+**Rate Limit Exceeded:**
+
+```http
+GET /api/transcripts?video_url=<id>
+Headers: x-api-key: test-key
+
+429 Too Many Requests
+{
+  "detail": "Rate limit exceeded. Try again in 43200 seconds."
+}
+```
