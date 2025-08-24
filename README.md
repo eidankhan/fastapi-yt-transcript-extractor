@@ -339,3 +339,44 @@ Headers: x-api-key: test-key
   "detail": "Rate limit exceeded. Try again in 43200 seconds."
 }
 ```
+
+### 🛡️ Token Bucket Limiter (Issue #17)
+
+This strategy provides a more flexible rate-limiting model:
+
+- Each user starts with a fixed number of tokens (e.g., `100/day`).
+- Every API call consumes **1 token**.
+- The bucket automatically refills at the beginning of each period (e.g., daily).
+
+#### How It Works
+- A Redis key stores the current token count for each user:
+```
+
+bucket:{api\_key}:{period\_start}
+
+````
+- The key expires automatically (`ex = period_seconds`).
+- If no tokens remain, the API responds with `429 Too Many Requests`.
+
+#### Example Response When Bucket Is Empty
+```json
+{
+"detail": "No tokens left. Bucket refills in 86321 seconds."
+}
+````
+#### Usage
+
+Protect an endpoint with the dependency:
+
+```python
+from fastapi import Depends
+from .deps import token_bucket_dependency
+
+@app.get("/transcript", dependencies=[Depends(token_bucket_dependency())])
+async def get_transcript():
+    return {"msg": "Transcript data"}
+```
+
+---
+
+✅ This limiter is recommended when you want **fair daily quotas per user** while still allowing burst traffic up to the token limit.

@@ -37,3 +37,47 @@ class RedisLimiter:
 
         allowed = current <= self.limit
         return allowed, self.limit, remaining, reset_ts
+    
+class TokenBucketLimiter:
+    def __init__(self, limit: int, period_seconds: int, redis_url: str = "redis://redis:6379/0"):
+        """
+        Token Bucket Limiter
+        :param limit: Max tokens per period (e.g., 100/day).
+        :param period_seconds: Reset interval (e.g., 86400 = 24h).
+        """
+        self.limit = limit
+        self.period_seconds = period_seconds
+        self.redis_url = redis_url
+        self.redis = None
+
+    async def init(self):
+        if self.redis is None:
+            self.redis = await r.from_url(self.redis_url, decode_responses=True)
+
+    async def check(self, api_key: str) -> Tuple[bool, int, int, int]:
+        """
+        Check if the user has tokens available.
+        Returns (allowed, limit, remaining, reset_ts).
+        """
+        await self.init()
+
+        now = int(time.time())
+        period_start = now - (now % self.period_seconds)
+        reset_ts = period_start + self.period_seconds
+
+        bucket_key = f"bucket:{api_key}:{period_start}"
+
+        # Initialize tokens if not present
+        tokens = await self.redis.get(bucket_key)
+        if tokens is None:
+            tokens = self.limit
+            await self.redis.set(bucket_key, tokens, ex=self.period_seconds)
+        else:
+            tokens = int(tokens)
+
+        if tokens > 0:
+            await self.redis.decr(bucket_key)
+            tokens -= 1
+            return True, self.limit, tokens, reset_ts
+
+        return False, self.limit, 0, reset_ts
