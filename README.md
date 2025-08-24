@@ -380,3 +380,45 @@ async def get_transcript():
 ---
 
 ✅ This limiter is recommended when you want **fair daily quotas per user** while still allowing burst traffic up to the token limit.
+
+
+## 🔑 Tier-Based Rate Limiting (Free vs Paid Users)
+
+We support **different API usage limits** for Free vs Paid tiers.  
+Currently, API keys and their tiers are **hardcoded** into the code (no dynamic lookup yet).
+
+---
+
+### 🛠 How It Works (Current State)
+1. **Hardcoded API Keys & Limits**
+   - Example:
+     ```python
+     # Example config (not dynamic lookup yet)
+     FREE_TIER_LIMIT = 100   # requests/day
+     PAID_TIER_LIMIT = 1000  # requests/day
+     ```
+   - The system assigns these limits manually in the limiter setup.
+
+2. **Rate Limiting**
+   - Each limiter uses the configured max requests depending on the tier.
+   - But right now, this is **wired manually in code** (not fetched by looking up the API key).
+
+3. **Request Handling**
+   - Clients must include `x-api-key` in headers.
+   - Currently, the system **does not validate** whether the key is valid or which tier it belongs to.
+   - The only difference is that **different hardcoded keys are associated with different rate limits in code**.
+
+### ✅ Example
+
+**Free Tier (hardcoded limit 100/day)**
+```http
+GET /api/resource
+x-api-key: free-user-key
+````
+
+**Paid Tier (hardcoded limit 1000/day)**
+
+```http
+GET /api/resource
+x-api-key: paid-user-key
+```

@@ -1,5 +1,5 @@
 import time
-from typing import Tuple
+from typing import Tuple, Dict
 from .redis_client import r
 
 class RedisLimiter:
@@ -81,3 +81,43 @@ class TokenBucketLimiter:
             return True, self.limit, tokens, reset_ts
 
         return False, self.limit, 0, reset_ts
+    
+# ... keep your existing RedisLimiter and TokenBucketLimiter here ...
+
+class TieredTokenBucketLimiter:
+    """
+    Token Bucket with per-tier limits (free/pro/enterprise).
+    Uses Redis atomic ops. Keys auto-expire at period end.
+    """
+    def __init__(self, tier_limits: Dict[str, Dict[str, int]]):
+        self.tier_limits = tier_limits
+
+    def _bucket_key(self, api_key: str, tier: str, period_start: int) -> str:
+        return f"user:{api_key}:bucket:{tier}:{period_start}"
+
+    async def check(self, api_key: str, tier: str) -> Tuple[bool, int, int, int]:
+        cfg = self.tier_limits.get(tier) or self.tier_limits["free"]
+        limit = int(cfg["limit"])
+        period = int(cfg["period"])
+
+        now = int(time.time())
+        period_start = now - (now % period)
+        key = self._bucket_key(api_key, tier, period_start)
+
+        # Ensure bucket exists only once per period (nx=True)
+        # If it already exists, this is a no-op.
+        await r.set(key, limit, ex=period, nx=True)
+
+        # Atomically decrement; if we went below 0, revert and deny
+        new_val = await r.decr(key)
+        if new_val >= 0:
+            remaining = new_val
+            ttl = await r.ttl(key)
+            reset_ts = now + (ttl if ttl and ttl > 0 else period)
+            return True, limit, remaining, reset_ts
+
+        # We overshot (concurrent requests). Undo and reject.
+        await r.incr(key)
+        ttl = await r.ttl(key)
+        reset_ts = now + (ttl if ttl and ttl > 0 else period)
+        return False, limit, 0, reset_ts

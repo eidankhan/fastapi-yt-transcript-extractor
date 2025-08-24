@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, Depends
 from app import routes
-from app.limiting.deps import rate_limit_dependency, redis_rate_limit_dependency, token_bucket_dependency
+from app.limiting.deps import rate_limit_dependency, redis_rate_limit_dependency, token_bucket_dependency, tiered_token_bucket_dependency
 
 app = FastAPI(title="YouTube Transcript API")
 
@@ -21,6 +21,6 @@ app.include_router(routes.router)
 def health_check():
     return "API is running fine! Go to /docs for API documentation."
 
-@app.get("/", dependencies=[Depends(token_bucket_dependency())])
+@app.get("/", dependencies=[Depends(tiered_token_bucket_dependency())])
 def root():
     return {"message": "Welcome to the YouTube Transcript API! Visit /docs for API documentation."}
