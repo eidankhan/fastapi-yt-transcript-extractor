@@ -465,3 +465,43 @@ This API requires every request to include a valid `x-api-key` header. The syste
 
   * Dynamic tier configuration from admin panel.
   * Integration with external OAuth providers.
+
+---
+
+> # Performance Optimization
+
+## Async Endpoints for Transcript Fetching (Issue #15) 
+
+Convert the FastAPI transcript fetching endpoint to support asynchronous requests, enabling concurrent handling of multiple requests and reducing response time under load.
+
+## Approach Implemented
+
+1. **Async FastAPI Endpoint**
+   * Converted the route to `async def fetch_transcript`.
+   * Retained existing logging, error handling, and rate-limiting dependencies.
+
+2. **Handling Synchronous Service**
+   * `get_transcript()` from `youtube_transcript_api` is synchronous.
+   * To prevent blocking the event loop, the synchronous function is executed in a **thread pool** using:
+     ```python
+     await loop.run_in_executor(executor, get_transcript, video_id, language)
+     ```
+   * Thread pool executor (`ThreadPoolExecutor`) allows multiple transcript fetches to run concurrently.
+
+3. **Concurrency Achieved**
+   * Multiple requests can be processed in parallel without blocking FastAPI's event loop.
+   * Current configuration (`max_workers=20`) supports ~20 simultaneous transcript fetches.
+   * Existing rate limiting (`tiered_token_bucket_dependency`) is preserved to ensure per-user request control.
+
+## Benefits
+
+* **Reduced Response Time** – Multiple transcript requests handled in parallel instead of sequentially.
+* **Stable Async Behavior** – Event loop remains free while synchronous service executes in threads.
+* **Safe and Compatible** – Service layer (`get_transcript()`) remains unchanged; no modifications needed to `youtube_transcript_api`.
+* **Maintainable** – Easy to extend with caching or future async service updates.
+
+## Limitations
+
+* **Thread-bound concurrency** – Limited by `max_workers` in the thread pool.
+* **Not fully async** – `youtube_transcript_api` is synchronous, so scaling beyond hundreds of concurrent requests may require a different async fetching approach.
+* **Resource Usage** – High concurrency may increase memory usage due to threads.
