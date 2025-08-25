@@ -3,7 +3,7 @@ import time
 from .memory import InMemoryLimiter
 from .persistent import RedisLimiter, TokenBucketLimiter, TieredTokenBucketLimiter
 from .config import TIER_LIMITS
-from .tier_service import get_tier
+from .tier_service import get_tier, validate_api_key
 
 # Configure limiters
 limiter = InMemoryLimiter(max_per_window=3, window_seconds=60)
@@ -88,13 +88,20 @@ def token_bucket_dependency():
 
     return _dep
 
+
 def tiered_token_bucket_dependency():
     async def _dep(request: Request):
         api_key = request.headers.get("x-api-key")
         if not api_key:
             raise HTTPException(status_code=401, detail="API key required")
 
+        # ✅ Validate API key exists in DB
+        validate_api_key(api_key)
+
+        # ✅ Get tier from Redis / test map / default
         tier = await get_tier(api_key)
+
+        # ✅ Check token bucket
         allowed, limit, remaining, reset_ts = await tiered_bucket.check(api_key, tier)
         reset_in = max(0, reset_ts - int(time.time()))
 

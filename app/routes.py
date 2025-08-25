@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query, Depends, Request
+from fastapi import APIRouter, Query, Depends, Request, HTTPException
 from fastapi.responses import JSONResponse
 from app.services import get_transcript
 from app.exceptions import TranscriptError
@@ -7,7 +7,6 @@ from fastapi import status
 from typing import Optional
 from app.logger import logger
 from app.limiting.deps import rate_limit_dependency
-
 
 router = APIRouter()
 

@@ -3,3 +3,8 @@ uvicorn[standard]
 yt-dlp
 youtube-transcript-api
 redis[asyncio]
+sqlalchemy
+psycopg2-binary
+passlib[bcrypt]
+python-dotenv
+pydantic[email]

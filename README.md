@@ -382,7 +382,7 @@ async def get_transcript():
 ✅ This limiter is recommended when you want **fair daily quotas per user** while still allowing burst traffic up to the token limit.
 
 
-## 🔑 Tier-Based Rate Limiting (Free vs Paid Users)
+## 🔑 Tier-Based Rate Limiting (Free vs Paid Users) (Issue #18)
 
 We support **different API usage limits** for Free vs Paid tiers.  
 Currently, API keys and their tiers are **hardcoded** into the code (no dynamic lookup yet).
@@ -422,3 +422,46 @@ x-api-key: free-user-key
 GET /api/resource
 x-api-key: paid-user-key
 ```
+
+## 🔑 API Key / Authentication Integration (Issue #19)
+
+This API requires every request to include a valid `x-api-key` header. The system ensures:
+
+1. Only registered users with valid API keys can access endpoints.
+2. Requests exceeding the assigned tier limits are rejected.
+3. Rate-limit headers are included in the response for client feedback.
+
+---
+
+### User Registration
+- Users are registered via the `/register` endpoint.
+- Each user receives a unique API key stored in the database.
+- Example fields stored: `name`, `email`, `hashed password`, `api_key`, `tier`, `created_at`.
+
+---
+
+### Validating API Key
+- All protected endpoints now check if the `x-api-key` exists in the database.
+- Requests with:
+  - Missing `x-api-key` → **401 Unauthorized**
+  - Invalid `x-api-key` → **401 Unauthorized**
+  - Valid `x-api-key` → proceeds to tier and rate-limit checks
+
+---
+
+### Tiered Token Bucket Strategy
+- The system looks up the tier for the API key (Free / Paid / Custom).
+- Each tier has configurable daily/monthly request limits.
+- Token bucket algorithm:
+  - Each user gets a bucket of tokens based on their tier.
+  - Every API call consumes 1 token.
+  - Bucket refills at the start of a new period.
+- Requests exceeding the bucket → **429 Too Many Requests**
+
+### Notes
+
+* This ensures a **real-world, secure, and tiered access control** system.
+* Future enhancements:
+
+  * Dynamic tier configuration from admin panel.
+  * Integration with external OAuth providers.
