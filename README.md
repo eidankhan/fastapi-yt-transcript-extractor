@@ -197,3 +197,271 @@ The log file will automatically rotate when it reaches 5MB, keeping the last 5 f
 * **Docker & Docker Compose**
 * **Pydantic** for request/response validation
 * **Uvicorn** as ASGI server
+
+---
+> # Token Limit & Rate Limiting
+
+## 🛡️ In-Memory Rate Limiting (Issue #15) 
+
+**Purpose:**  
+Introduce basic rate limiting for the API to prevent abuse and enforce usage limits per user/API key.
+
+### 🔹 Key Points
+
+- **Per-user/API key limits:**  
+  Each user must provide an `x-api-key` header. Requests without it are rejected (`401 Unauthorized`).  
+
+- **Request limits:**  
+  - Configurable `max_per_window` (e.g., 3 requests)  
+  - Configurable `window_seconds` (e.g., 60 seconds)  
+
+- **Enforcement:**  
+  - Requests exceeding the limit return `429 Too Many Requests`  
+  - Middleware attaches headers to all responses:  
+    ```
+    X-RateLimit-Limit      # Maximum requests allowed per window
+    X-RateLimit-Remaining  # Remaining requests in current window
+    X-RateLimit-Reset      # Timestamp when current window resets
+    Retry-After            # Included on 429 responses
+    ```
+
+- **Implementation:**  
+  - `app/limiting/memory.py` → in-memory counter per API key  
+  - `app/limiting/deps.py` → FastAPI dependency for rate limiting  
+  - `app/main.py` → middleware to attach headers  
+  - `app/routes.py` → transcript endpoint protected via dependency  
+
+- **Behavior:**  
+  - 1st–`max_per_window` requests → `200 OK`  
+  - Requests beyond limit → `429`  
+  - No API key → `401 Unauthorized`  
+  - Counters reset after the configured window period  
+
+- **Limitations:**  
+  - In-memory only → counters reset if the server restarts  
+  - Suitable as an MVP / proof-of-concept before moving to persistent storage (Redis/Postgres)  
+
+### 🔹 Example Requests
+
+**Successful Request:**
+```http
+GET /api/transcripts?video_url=<id>
+Headers: x-api-key: test-key
+
+200 OK
+{
+  "transcript": "..."
+}
+````
+
+**Rate Limit Exceeded:**
+
+```http
+GET /api/transcripts?video_url=<id>
+Headers: x-api-key: test-key
+
+429 Too Many Requests
+{
+  "detail": "Rate limit exceeded. Try again in 45 seconds."
+}
+```
+## 🛡️ Persistent Rate Limiting (Issue #16)
+
+Enhance the API with persistent rate limiting using Redis to ensure limits survive server restarts and support longer time windows (daily/monthly). This is crucial for preventing abuse and enabling monetization tiers.
+
+### 🔹 Key Points
+
+- **Persistence:**  
+  - API usage per user/API key is stored in Redis.  
+  - Counters survive **server restarts**.  
+
+- **Limits & Windows:**  
+  - Configurable `limit` (e.g., 100 requests per day for free users).  
+  - Configurable `period_seconds` (daily = 86400s, monthly = 2592000s).  
+  - Each user/API key gets a separate counter with an automatic expiration.
+
+- **API Key Enforcement:**  
+  - Requests must include `x-api-key` header.  
+  - Missing API key → `401 Unauthorized`.  
+
+- **Enforcement Behavior:**  
+  - Allowed requests → `200 OK`  
+  - Exceeding the limit → `429 Too Many Requests`  
+  - Response headers provide usage information:
+
+```
+
+X-RateLimit-Limit      # Maximum requests per window
+X-RateLimit-Remaining  # Remaining requests in current window
+X-RateLimit-Reset      # Timestamp when current window resets
+Retry-After            # Included in 429 responses
+
+````
+
+- **Integration with FastAPI:**  
+  - Dependency function `redis_rate_limit_dependency` returns an async function `_dep`.  
+  - Applied per route using `Depends(redis_rate_limit_dependency)`.  
+  - Handles attaching headers and raising HTTP exceptions automatically.  
+
+- **Implementation:**  
+  - `app/limiting/redis_client.py` → Redis connection setup.  
+  - `app/limiting/persistent.py` → RedisLimiter class for counting requests.  
+  - `app/limiting/deps.py` → FastAPI dependency for Redis rate limiting.  
+
+- **Advantages over In-Memory Limiter:**  
+  - Limits persist across restarts.  
+  - Supports longer periods (daily/monthly).  
+  - Can be extended to **tiered plans** (free/paid/enterprise).  
+
+---
+
+### 🔹 Example Request/Response
+
+**Successful Request:**
+```http
+GET /api/transcripts?video_url=<id>
+Headers: x-api-key: test-key
+
+200 OK
+{
+  "transcript": "..."
+}
+````
+
+**Rate Limit Exceeded:**
+
+```http
+GET /api/transcripts?video_url=<id>
+Headers: x-api-key: test-key
+
+429 Too Many Requests
+{
+  "detail": "Rate limit exceeded. Try again in 43200 seconds."
+}
+```
+
+### 🛡️ Token Bucket Limiter (Issue #17)
+
+This strategy provides a more flexible rate-limiting model:
+
+- Each user starts with a fixed number of tokens (e.g., `100/day`).
+- Every API call consumes **1 token**.
+- The bucket automatically refills at the beginning of each period (e.g., daily).
+
+#### How It Works
+- A Redis key stores the current token count for each user:
+```
+
+bucket:{api\_key}:{period\_start}
+
+````
+- The key expires automatically (`ex = period_seconds`).
+- If no tokens remain, the API responds with `429 Too Many Requests`.
+
+#### Example Response When Bucket Is Empty
+```json
+{
+"detail": "No tokens left. Bucket refills in 86321 seconds."
+}
+````
+#### Usage
+
+Protect an endpoint with the dependency:
+
+```python
+from fastapi import Depends
+from .deps import token_bucket_dependency
+
+@app.get("/transcript", dependencies=[Depends(token_bucket_dependency())])
+async def get_transcript():
+    return {"msg": "Transcript data"}
+```
+
+---
+
+✅ This limiter is recommended when you want **fair daily quotas per user** while still allowing burst traffic up to the token limit.
+
+
+## 🔑 Tier-Based Rate Limiting (Free vs Paid Users) (Issue #18)
+
+We support **different API usage limits** for Free vs Paid tiers.  
+Currently, API keys and their tiers are **hardcoded** into the code (no dynamic lookup yet).
+
+---
+
+### 🛠 How It Works (Current State)
+1. **Hardcoded API Keys & Limits**
+   - Example:
+     ```python
+     # Example config (not dynamic lookup yet)
+     FREE_TIER_LIMIT = 100   # requests/day
+     PAID_TIER_LIMIT = 1000  # requests/day
+     ```
+   - The system assigns these limits manually in the limiter setup.
+
+2. **Rate Limiting**
+   - Each limiter uses the configured max requests depending on the tier.
+   - But right now, this is **wired manually in code** (not fetched by looking up the API key).
+
+3. **Request Handling**
+   - Clients must include `x-api-key` in headers.
+   - Currently, the system **does not validate** whether the key is valid or which tier it belongs to.
+   - The only difference is that **different hardcoded keys are associated with different rate limits in code**.
+
+### ✅ Example
+
+**Free Tier (hardcoded limit 100/day)**
+```http
+GET /api/resource
+x-api-key: free-user-key
+````
+
+**Paid Tier (hardcoded limit 1000/day)**
+
+```http
+GET /api/resource
+x-api-key: paid-user-key
+```
+
+## 🔑 API Key / Authentication Integration (Issue #19)
+
+This API requires every request to include a valid `x-api-key` header. The system ensures:
+
+1. Only registered users with valid API keys can access endpoints.
+2. Requests exceeding the assigned tier limits are rejected.
+3. Rate-limit headers are included in the response for client feedback.
+
+---
+
+### User Registration
+- Users are registered via the `/register` endpoint.
+- Each user receives a unique API key stored in the database.
+- Example fields stored: `name`, `email`, `hashed password`, `api_key`, `tier`, `created_at`.
+
+---
+
+### Validating API Key
+- All protected endpoints now check if the `x-api-key` exists in the database.
+- Requests with:
+  - Missing `x-api-key` → **401 Unauthorized**
+  - Invalid `x-api-key` → **401 Unauthorized**
+  - Valid `x-api-key` → proceeds to tier and rate-limit checks
+
+---
+
+### Tiered Token Bucket Strategy
+- The system looks up the tier for the API key (Free / Paid / Custom).
+- Each tier has configurable daily/monthly request limits.
+- Token bucket algorithm:
+  - Each user gets a bucket of tokens based on their tier.
+  - Every API call consumes 1 token.
+  - Bucket refills at the start of a new period.
+- Requests exceeding the bucket → **429 Too Many Requests**
+
+### Notes
+
+* This ensures a **real-world, secure, and tiered access control** system.
+* Future enhancements:
+
+  * Dynamic tier configuration from admin panel.
+  * Integration with external OAuth providers.
