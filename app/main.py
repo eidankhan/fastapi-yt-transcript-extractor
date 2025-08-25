@@ -1,10 +1,9 @@
 from fastapi import FastAPI, Request, Depends
-from app import routes
 from app.limiting.deps import (rate_limit_dependency, redis_rate_limit_dependency,
                                token_bucket_dependency, tiered_token_bucket_dependency)
 from .database import Base, engine
 from fastapi.responses import JSONResponse
-from app.controllers import users
+from app.routes import users, transcripts
 
 
 # Create tables if not exist
@@ -22,7 +21,7 @@ async def api_key_and_rate_limit_middleware(request: Request, call_next):
     - Requires API key for all other routes.
     - Attaches rate-limit headers set by dependencies.
     """
-    public_paths = ["/users/register", "/users/login", "/healthz", "/docs", "/openapi.json"]
+    public_paths = ["/","/users/register", "/users/login", "/healthz", "/docs", "/openapi.json"]
 
     # Allow public routes without API key
     if request.url.path not in public_paths:
@@ -41,13 +40,14 @@ async def api_key_and_rate_limit_middleware(request: Request, call_next):
     return response
 
 # include routes
-app.include_router(routes.router)
+# app.include_router(routes.router)
 app.include_router(users.router)  # 👈 user register + login
+app.include_router(transcripts.router)  # 👈 transcripts
 
 @app.get("/healthz")
 def health_check():
     return "API is running fine! Go to /docs for API documentation."
 
-@app.get("/", dependencies=[Depends(tiered_token_bucket_dependency())])
+@app.get("/")
 def root():
     return {"message": "Welcome to the YouTube Transcript API! Visit /docs for API documentation."}
