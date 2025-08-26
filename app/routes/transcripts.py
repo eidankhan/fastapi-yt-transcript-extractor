@@ -1,16 +1,18 @@
-from fastapi import APIRouter, Query, Depends, HTTPException
+from typing import Optional
+from fastapi import APIRouter, Query, Depends, status
 from fastapi.responses import JSONResponse
-from app.services import get_transcript
+
+from app.services.transcript_service import get_transcript
 from app.exceptions import TranscriptError
 from app.schemas import SuccessResponse, ErrorResponse
-from fastapi import status
-from typing import Optional
 from app.logger import logger
 from app.limiting.deps import tiered_token_bucket_dependency
 
 router = APIRouter(prefix="/v1/transcripts", tags=["transcripts"])
 
-@router.get("",response_model=SuccessResponse,
+@router.get(
+    "",
+    response_model=SuccessResponse,
     responses={
         200: {"model": SuccessResponse, "description": "Transcript fetched successfully"},
         403: {"model": ErrorResponse, "description": "Video is private or transcript disabled"},
@@ -27,9 +29,12 @@ async def fetch_transcript(
     language: Optional[str] = Query(None, description="Optional language code, e.g., 'en'")
 ):
     logger.info(f"Received request: video_id={video_id}, language={language}")
+
     try:
-        transcript = get_transcript(video_id, language)
+        # ✅ Directly await async get_transcript
+        transcript = await get_transcript(video_id, language)
         logger.info(f"Transcript fetched successfully for video_id={video_id}")
+
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content=SuccessResponse(
@@ -38,6 +43,7 @@ async def fetch_transcript(
                 data=transcript,
             ).dict(),
         )
+
     except TranscriptError as e:
         logger.error(f"Error fetching transcript for video_id={video_id}: {e}")
         return JSONResponse(

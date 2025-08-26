@@ -465,3 +465,104 @@ This API requires every request to include a valid `x-api-key` header. The syste
 
   * Dynamic tier configuration from admin panel.
   * Integration with external OAuth providers.
+
+---
+
+> # Performance Optimization
+
+## Async Endpoints for Transcript Fetching (Issue #15) 
+
+Convert the FastAPI transcript fetching endpoint to support asynchronous requests, enabling concurrent handling of multiple requests and reducing response time under load.
+
+## Approach Implemented
+
+1. **Async FastAPI Endpoint**
+   * Converted the route to `async def fetch_transcript`.
+   * Retained existing logging, error handling, and rate-limiting dependencies.
+
+2. **Handling Synchronous Service**
+   * `get_transcript()` from `youtube_transcript_api` is synchronous.
+   * To prevent blocking the event loop, the synchronous function is executed in a **thread pool** using:
+     ```python
+     await loop.run_in_executor(executor, get_transcript, video_id, language)
+     ```
+   * Thread pool executor (`ThreadPoolExecutor`) allows multiple transcript fetches to run concurrently.
+
+3. **Concurrency Achieved**
+   * Multiple requests can be processed in parallel without blocking FastAPI's event loop.
+   * Current configuration (`max_workers=20`) supports ~20 simultaneous transcript fetches.
+   * Existing rate limiting (`tiered_token_bucket_dependency`) is preserved to ensure per-user request control.
+
+## Benefits
+
+* **Reduced Response Time** – Multiple transcript requests handled in parallel instead of sequentially.
+* **Stable Async Behavior** – Event loop remains free while synchronous service executes in threads.
+* **Safe and Compatible** – Service layer (`get_transcript()`) remains unchanged; no modifications needed to `youtube_transcript_api`.
+* **Maintainable** – Easy to extend with caching or future async service updates.
+
+## Limitations
+
+* **Thread-bound concurrency** – Limited by `max_workers` in the thread pool.
+* **Not fully async** – `youtube_transcript_api` is synchronous, so scaling beyond hundreds of concurrent requests may require a different async fetching approach.
+* **Resource Usage** – High concurrency may increase memory usage due to threads.
+
+## ♻️ Caching frequently requested transcripts #2
+
+This caching strategy improves API performance by reducing repeated calls to the YouTube Transcript API. Redis is used as the caching layer, storing transcript data for 24 hours.
+
+### Workflow
+
+1. **Cache Key Construction**
+   - Each transcript is cached based on:
+     ```
+     transcript:{video_id}:{language}
+     ```
+   - Example: `transcript:dQw4w9WgXcQ:en`
+
+2. **Cache Lookup**
+   - When a transcript request is received:
+     - The service first queries Redis for the cache key.
+     - If a cached transcript exists, it is returned immediately.
+     - If not, the YouTube Transcript API is called to fetch the transcript.
+
+3. **Fetching and Processing**
+   - If the transcript is not in cache:
+     - Fetch from YouTube API.
+     - Format the transcript and generate timestamps.
+     - Store the processed result in Redis with a TTL of 24 hours.
+
+4. **Caching**
+   - The transcript is serialized (JSON) and stored in Redis with an expiration of 24 hours.
+   - This ensures that repeated requests within 24 hours do not hit the YouTube API, reducing latency and load.
+
+### Data Stored in Cache
+
+Each cache entry is stored in the following format:
+
+```json
+{
+  "video_id": "<video_id>",
+  "language": "<language_name>",
+  "language_code": "<language_code>",
+  "transcript": "<formatted_transcript_text>",
+  "transcript_with_timestamps": "<srt_formatted_transcript>"
+}
+````
+
+* `video_id`: YouTube video ID
+* `language`: Display name of the language
+* `language_code`: ISO code of the language
+* `transcript`: Cleaned and formatted transcript text
+* `transcript_with_timestamps`: Transcript in SRT-like format
+
+## Cache Expiry
+
+* Each transcript is stored with a TTL of **24 hours**.
+* After 24 hours, the cache entry automatically expires to prevent stale data.
+
+## Benefits
+
+* **Reduced API Calls**: Frequently requested transcripts are served from Redis.
+* **Faster Response**: Eliminates network latency for cached transcripts.
+* **Scalable**: Minimal additional checks and simple key format ensures Redis performance is not degraded.
+* **TTL-based Expiry**: Ensures data freshness without manual cache management.
