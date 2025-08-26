@@ -40,7 +40,6 @@ async def api_key_and_rate_limit_middleware(request: Request, call_next):
     return response
 
 # include routes
-# app.include_router(routes.router)
 app.include_router(users.router)  # 👈 user register + login
 app.include_router(transcripts.router)  # 👈 transcripts
 
