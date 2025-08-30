@@ -4,12 +4,38 @@ from app.limiting.deps import (rate_limit_dependency, redis_rate_limit_dependenc
 from .database import Base, engine
 from fastapi.responses import JSONResponse
 from app.routes import users, transcripts
-
+import os
+from fastapi.middleware.cors import CORSMiddleware
 
 # Create tables if not exist
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="YouTube Transcript API")
+
+
+# ===== CORS Configuration =====
+origins = [
+    "https://transcripto.dev", # prod domain later
+    "http://transcripto.dev", 
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    # "*",  # ✅ add this line to allow everything (for testing only)
+    # "http://127.0.0.1:5501",   # local playground
+    # "http://localhost:5501",
+
+]
+
+# Optional: allow all origins for local dev
+if os.getenv("ENV") == "local":
+    origins.append("*")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # Middleware to handle API keys + attach rate-limit headers
